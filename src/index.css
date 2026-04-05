@@ -1,0 +1,57 @@
+:root {
+  font-family:
+    "IBM Plex Sans",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #f4f8ff;
+  background:
+    radial-gradient(circle at top left, rgba(76, 145, 100, 0.2), transparent 26%),
+    radial-gradient(circle at top right, rgba(49, 114, 175, 0.18), transparent 28%),
+    linear-gradient(180deg, #09111f 0%, #060b14 100%);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+a {
+  color: #9ce4c2;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+code {
+  padding: 0.08rem 0.32rem;
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.08);
+  font-family:
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+}
+
+#root {
+  min-height: 100vh;
+}
