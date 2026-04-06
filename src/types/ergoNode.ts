@@ -4,6 +4,8 @@ export interface ErgoNodeInfo {
   fullHeight: number;
   headersHeight: number;
   bestHeaderId: string;
+  indexedHeight?: number;
+  maxIndexedHeight?: number;
 }
 
 export interface BlockHeader {
@@ -76,6 +78,18 @@ export interface IndexedTransaction {
   dataInputs: { boxId: string }[];
   outputs: TransactionBox[];
   size: number;
+}
+
+export interface IndexedBlock {
+  header: BlockHeader;
+  transactions: IndexedTransaction[];
+  height: number;
+  size: number;
+}
+
+export interface IndexedHeightInfo {
+  indexedHeight: number;
+  fullHeight?: number;
 }
 
 export interface IndexedToken {

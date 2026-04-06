@@ -1,9 +1,10 @@
 import { BLOCK_SLICE_SIZE, MINER_FEE_ERGO_TREE } from '../config';
 import type {
   BlockHeader,
-  BlockTransactions,
   ErgoAsset,
   ErgoNodeInfo,
+  IndexedBlock,
+  IndexedHeightInfo,
   IndexedTransaction,
   TransactionBox,
 } from '../types/ergoNode';
@@ -31,6 +32,7 @@ export interface RentCollectionRange {
 interface BlockChainContext {
   spendByBoxId: Map<string, string>;
   txOrder: Map<string, number>;
+  txById: Map<string, IndexedTransaction>;
 }
 
 interface CachedProcessedBlock {
@@ -39,12 +41,10 @@ interface CachedProcessedBlock {
   events: RentCollectionEvent[];
 }
 
-const ergoTreeAddressCache = new Map<string, string>();
-const transactionCache = new Map<string, Promise<IndexedTransaction>>();
 const processedBlockCache = new Map<string, CachedProcessedBlock>();
 const processedBlockRequestCache = new Map<string, Promise<CachedProcessedBlock>>();
 
-const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v1';
+const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v3';
 const MAX_CACHED_PROCESSED_BLOCKS = 400;
 
 let processedBlockCacheHydrated = false;
@@ -121,14 +121,11 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const rememberAddress = (box: TransactionBox) => {
-  if (box.ergoTree && box.address) {
-    ergoTreeAddressCache.set(box.ergoTree, box.address);
-  }
-};
-
 const hasRentMarker = (extension?: Record<string, string> | null) =>
   Boolean(extension && Object.prototype.hasOwnProperty.call(extension, '127'));
+
+const getBoxAddress = (box: Pick<TransactionBox, 'address' | 'ergoTree'>) =>
+  box.address?.trim() || box.ergoTree;
 
 const fetchBlockHeaders = async (
   nodeUrl: string,
@@ -142,34 +139,37 @@ const fetchBlockHeaders = async (
   return fetchJson<BlockHeader[]>(`${nodeUrl}/blocks/chainSlice?${params.toString()}`);
 };
 
-const fetchBlockTransactions = async (nodeUrl: string, headerId: string) =>
-  fetchJson<BlockTransactions>(`${nodeUrl}/blocks/${headerId}/transactions`);
-
-const fetchIndexedTransaction = async (nodeUrl: string, txId: string) => {
-  if (!transactionCache.has(txId)) {
-    transactionCache.set(
-      txId,
-      fetchJson<IndexedTransaction>(`${nodeUrl}/blockchain/transaction/byId/${txId}`),
-    );
+const fetchIndexedHeight = async (nodeUrl: string, info?: ErgoNodeInfo | null) => {
+  if (typeof info?.indexedHeight === 'number') {
+    return info.indexedHeight;
   }
-  return transactionCache.get(txId)!;
+
+  const indexedHeightInfo = await fetchJson<IndexedHeightInfo>(
+    `${nodeUrl}/blockchain/indexedHeight`,
+  );
+  return indexedHeightInfo.indexedHeight;
 };
 
-const buildBlockChainContext = (blockTransactions: BlockTransactions): BlockChainContext => {
+const fetchIndexedBlock = async (nodeUrl: string, headerId: string) =>
+  fetchJson<IndexedBlock>(`${nodeUrl}/blockchain/block/byHeaderId/${headerId}`);
+
+const buildBlockChainContext = (transactions: IndexedTransaction[]): BlockChainContext => {
   const txOrder = new Map<string, number>();
   const spendByBoxId = new Map<string, string>();
+  const txById = new Map<string, IndexedTransaction>();
 
-  blockTransactions.transactions.forEach((transaction, index) => {
+  transactions.forEach((transaction, index) => {
     txOrder.set(transaction.id, index);
+    txById.set(transaction.id, transaction);
   });
 
-  blockTransactions.transactions.forEach((transaction) => {
+  transactions.forEach((transaction) => {
     transaction.inputs.forEach((input) => {
       spendByBoxId.set(input.boxId, transaction.id);
     });
   });
 
-  return { spendByBoxId, txOrder };
+  return { spendByBoxId, txOrder, txById };
 };
 
 interface ResolvedOutputs {
@@ -182,7 +182,6 @@ type CollectorOutputMatcher = (output: TransactionBox) => boolean;
 interface RecipientAccumulator {
   kind: RecipientSummary['kind'];
   address: string;
-  ergoTree: string;
   nanoErg: number;
   outputCount: number;
   assetAmounts: Map<string, number>;
@@ -193,21 +192,24 @@ const sortTxIdsByBlockOrder = (txIds: Iterable<string>, blockContext: BlockChain
     (left, right) => (blockContext.txOrder.get(left) ?? 0) - (blockContext.txOrder.get(right) ?? 0),
   );
 
-const resolveChainedOutputs = async (
-  nodeUrl: string,
+const resolveChainedOutputs = (
   output: TransactionBox,
   blockContext: BlockChainContext,
   isCollectorOutput: CollectorOutputMatcher,
   visitedTxIds = new Set<string>(),
-): Promise<ResolvedOutputs> => {
+): ResolvedOutputs => {
   const spendTxId = blockContext.spendByBoxId.get(output.boxId);
   if (!spendTxId || visitedTxIds.has(spendTxId)) {
-    return { outputs: [output], chainTxIds: new Set() };
+    return { outputs: [output], chainTxIds: new Set<string>() };
   }
 
-  const spendingTransaction = await fetchIndexedTransaction(nodeUrl, spendTxId);
+  const spendingTransaction = blockContext.txById.get(spendTxId);
+  if (!spendingTransaction) {
+    return { outputs: [output], chainTxIds: new Set<string>() };
+  }
+
   if (spendingTransaction.inputs.length !== 1) {
-    return { outputs: [output], chainTxIds: new Set() };
+    return { outputs: [output], chainTxIds: new Set<string>() };
   }
 
   const nextVisitedTxIds = new Set(visitedTxIds);
@@ -217,15 +219,12 @@ const resolveChainedOutputs = async (
   const resolvedOutputs: TransactionBox[] = [];
 
   for (const childOutput of spendingTransaction.outputs) {
-    rememberAddress(childOutput);
-
     if (!isCollectorOutput(childOutput)) {
       resolvedOutputs.push(childOutput);
       continue;
     }
 
-    const childResolution = await resolveChainedOutputs(
-      nodeUrl,
+    const childResolution = resolveChainedOutputs(
       childOutput,
       blockContext,
       isCollectorOutput,
@@ -293,7 +292,6 @@ const mergeRecipientsByAddress = (recipients: RecipientAccumulator[]) => {
   return Array.from(grouped.values()).map((recipient) => ({
     kind: recipient.kind,
     address: recipient.address,
-    ergoTree: recipient.ergoTree,
     nanoErg: recipient.nanoErg,
     outputCount: recipient.outputCount,
     assets: buildAssetSummaries(recipient.assetAmounts),
@@ -303,10 +301,10 @@ const mergeRecipientsByAddress = (recipients: RecipientAccumulator[]) => {
 const buildRecipientGroups = (
   rentInputErgoTrees: Set<string>,
   collectorInputNanoErgByErgoTree: Map<string, number>,
+  collectorInputAddressByErgoTree: Map<string, string>,
   collectorInputAssetsByErgoTree: Map<string, Map<string, number>>,
   resolvedOutputs: TransactionBox[],
 ) => {
-  resolvedOutputs.forEach(rememberAddress);
   const collectorRecipients = new Map<string, RecipientAccumulator>();
   const minerRecipients = new Map<string, RecipientAccumulator>();
 
@@ -315,8 +313,7 @@ const buildRecipientGroups = (
       return;
     }
 
-    const address = ergoTreeAddressCache.get(output.ergoTree) ?? output.address;
-    ergoTreeAddressCache.set(output.ergoTree, address);
+    const address = getBoxAddress(output);
 
     if (output.ergoTree === MINER_FEE_ERGO_TREE) {
       const key = address;
@@ -332,7 +329,6 @@ const buildRecipientGroups = (
       minerRecipients.set(key, {
         kind: 'minerFee',
         address,
-        ergoTree: output.ergoTree,
         nanoErg: output.value,
         outputCount: 1,
         assetAmounts: new Map(output.assets.map((asset) => [asset.tokenId, asset.amount])),
@@ -351,7 +347,6 @@ const buildRecipientGroups = (
     collectorRecipients.set(output.ergoTree, {
       kind: 'collector',
       address,
-      ergoTree: output.ergoTree,
       nanoErg: output.value,
       outputCount: 1,
       assetAmounts: new Map(output.assets.map((asset) => [asset.tokenId, asset.amount])),
@@ -359,7 +354,7 @@ const buildRecipientGroups = (
   });
 
   collectorInputNanoErgByErgoTree.forEach((inputNanoErg, ergoTree) => {
-    const address = ergoTreeAddressCache.get(ergoTree) ?? ergoTree;
+    const address = collectorInputAddressByErgoTree.get(ergoTree) ?? ergoTree;
     const existingCollector = collectorRecipients.get(ergoTree);
     const inputAssetAmounts = collectorInputAssetsByErgoTree.get(ergoTree) ?? new Map<string, number>();
 
@@ -372,7 +367,6 @@ const buildRecipientGroups = (
     collectorRecipients.set(ergoTree, {
       kind: 'collector',
       address,
-      ergoTree,
       nanoErg: -inputNanoErg,
       outputCount: 0,
       assetAmounts: new Map(
@@ -411,20 +405,17 @@ const buildRecipientGroups = (
   };
 };
 
-const buildEvent = async (
-  nodeUrl: string,
+const buildEvent = (
   transaction: IndexedTransaction,
   blockContext: BlockChainContext,
-): Promise<RentCollectionEvent> => {
-  transaction.inputs.forEach(rememberAddress);
-  transaction.outputs.forEach(rememberAddress);
-
+): RentCollectionEvent => {
   const rentInputs = transaction.inputs.filter((input) =>
     hasRentMarker(input.spendingProof?.extension),
   );
   const rentInputCount = rentInputs.length;
   const rentInputErgoTrees = new Set(rentInputs.map((input) => input.ergoTree));
   const collectorInputNanoErgByErgoTree = new Map<string, number>();
+  const collectorInputAddressByErgoTree = new Map<string, string>();
   const collectorInputAssetsByErgoTree = new Map<string, Map<string, number>>();
 
   transaction.inputs.forEach((input) => {
@@ -436,6 +427,9 @@ const buildEvent = async (
       input.ergoTree,
       (collectorInputNanoErgByErgoTree.get(input.ergoTree) ?? 0) + input.value,
     );
+    if (!collectorInputAddressByErgoTree.has(input.ergoTree)) {
+      collectorInputAddressByErgoTree.set(input.ergoTree, getBoxAddress(input));
+    }
 
     if (!collectorInputAssetsByErgoTree.has(input.ergoTree)) {
       collectorInputAssetsByErgoTree.set(input.ergoTree, new Map());
@@ -455,12 +449,7 @@ const buildEvent = async (
   const chainTxIds = new Set<string>();
 
   for (const output of collectorOutputs) {
-    const resolution = await resolveChainedOutputs(
-      nodeUrl,
-      output,
-      blockContext,
-      isCollectorOutput,
-    );
+    const resolution = resolveChainedOutputs(output, blockContext, isCollectorOutput);
     resolution.outputs.forEach((resolvedOutput) => resolvedOutputs.push(resolvedOutput));
     resolution.chainTxIds.forEach((txId) => chainTxIds.add(txId));
   }
@@ -468,6 +457,7 @@ const buildEvent = async (
   const { collectors, minerFees, collectedAssets } = buildRecipientGroups(
     rentInputErgoTrees,
     collectorInputNanoErgByErgoTree,
+    collectorInputAddressByErgoTree,
     collectorInputAssetsByErgoTree,
     resolvedOutputs,
   );
@@ -539,19 +529,13 @@ const fetchProcessedBlock = async (nodeUrl: string, header: BlockHeader) => {
 
   if (!processedBlockRequestCache.has(header.id)) {
     const request = (async () => {
-      const blockTransactions = await fetchBlockTransactions(nodeUrl, header.id);
-      const blockContext = buildBlockChainContext(blockTransactions);
-      const rentTransactionIds = blockTransactions.transactions
+      const indexedBlock = await fetchIndexedBlock(nodeUrl, header.id);
+      const blockContext = buildBlockChainContext(indexedBlock.transactions);
+      const events = indexedBlock.transactions
         .filter((transaction) =>
           transaction.inputs.some((input) => hasRentMarker(input.spendingProof?.extension)),
         )
-        .map((transaction) => transaction.id);
-      const detailedTransactions = await Promise.all(
-        rentTransactionIds.map((txId) => fetchIndexedTransaction(nodeUrl, txId)),
-      );
-      const events = await Promise.all(
-        detailedTransactions.map((transaction) => buildEvent(nodeUrl, transaction, blockContext)),
-      );
+        .map((transaction) => buildEvent(transaction, blockContext));
 
       events.sort((left, right) => right.txIndex - left.txIndex);
 
@@ -579,12 +563,18 @@ export const fetchRentCollectionRange = async (
   nodeUrl: string,
   fromHeight: number,
   toHeight: number,
+  indexedHeight?: number,
 ): Promise<RentCollectionRange> => {
-  if (toHeight < fromHeight) {
+  const effectiveIndexedHeight =
+    typeof indexedHeight === 'number' ? indexedHeight : await fetchIndexedHeight(nodeUrl);
+  const normalizedFromHeight = Math.max(0, fromHeight);
+  const normalizedToHeight = Math.min(Math.max(0, toHeight), effectiveIndexedHeight);
+
+  if (normalizedToHeight < normalizedFromHeight) {
     return { events: [], scannedBlocks: 0, highestHeight: null, lowestHeight: null };
   }
 
-  const headers = await fetchBlockHeaders(nodeUrl, fromHeight, toHeight);
+  const headers = await fetchBlockHeaders(nodeUrl, normalizedFromHeight, normalizedToHeight);
   if (!headers.length) {
     return { events: [], scannedBlocks: 0, highestHeight: null, lowestHeight: null };
   }
@@ -607,12 +597,17 @@ export const fetchRentCollectionRange = async (
 
 export const fetchNodeInfo = async (nodeUrl: string) => {
   const info = await fetchJson<ErgoNodeInfo>(`${nodeUrl}/info`);
+  const indexedHeight = await fetchIndexedHeight(nodeUrl, info);
+
   return {
     name: info.name,
     network: info.network,
     fullHeight: info.fullHeight,
     headersHeight: info.headersHeight,
     bestHeaderId: info.bestHeaderId,
+    indexedHeight,
+    maxIndexedHeight:
+      typeof info.maxIndexedHeight === 'number' ? info.maxIndexedHeight : undefined,
   };
 };
 
@@ -620,17 +615,26 @@ export const fetchRentCollectionSlice = async (
   nodeUrl: string,
   fromHeight: number,
   previousStats: LoadedStats | null = null,
+  indexedHeight?: number,
 ): Promise<RentCollectionSlice> => {
-  const toHeight = Math.max(0, fromHeight);
+  const effectiveIndexedHeight =
+    typeof indexedHeight === 'number' ? indexedHeight : await fetchIndexedHeight(nodeUrl);
+  const toHeight = Math.max(0, Math.min(fromHeight, effectiveIndexedHeight));
   const sliceFromHeight = Math.max(0, toHeight - (BLOCK_SLICE_SIZE - 1));
-  const range = await fetchRentCollectionRange(nodeUrl, sliceFromHeight, toHeight);
+  const range = await fetchRentCollectionRange(
+    nodeUrl,
+    sliceFromHeight,
+    toHeight,
+    effectiveIndexedHeight,
+  );
+  const nextHeight = sliceFromHeight > 0 ? sliceFromHeight - 1 : null;
 
   if (!range.scannedBlocks) {
     return {
       events: [],
       stats: previousStats ?? createEmptyStats(),
-      nextHeight: null,
-      hasMore: false,
+      nextHeight,
+      hasMore: nextHeight !== null,
     };
   }
 
@@ -641,8 +645,6 @@ export const fetchRentCollectionSlice = async (
     range.highestHeight,
     range.lowestHeight,
   );
-  const nextHeight = sliceFromHeight > 0 ? sliceFromHeight - 1 : null;
-
   return {
     events: range.events,
     stats,

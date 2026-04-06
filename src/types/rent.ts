@@ -6,7 +6,6 @@ export interface CollectedAssetSummary {
 export interface RecipientSummary {
   kind: 'collector' | 'minerFee';
   address: string;
-  ergoTree: string;
   nanoErg: number;
   outputCount: number;
   assets: CollectedAssetSummary[];
