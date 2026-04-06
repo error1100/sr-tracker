@@ -106,9 +106,6 @@ const recipientShortLabel = (kind: RentCollectionEvent['collectors'][number]['ki
 const formatRecipientAddress = (address: string) =>
   address.length > 80 ? shortenId(address, 24) : address;
 
-const getIndexedHeight = (nodeInfo: AppState['nodeInfo']) =>
-  nodeInfo?.indexedHeight ?? nodeInfo?.fullHeight ?? null;
-
 function App() {
   const [state, setState] = useState<AppState>(initialState);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
@@ -184,8 +181,7 @@ function App() {
     try {
       const nodeInfo = await fetchNodeInfo(DEFAULT_ERGO_NODE_URL);
       setState((current) => ({ ...current, nodeInfo }));
-      const indexedHeight = getIndexedHeight(nodeInfo) ?? nodeInfo.fullHeight;
-      await loadSlice(indexedHeight, null, true, indexedHeight);
+      await loadSlice(nodeInfo.indexedHeight, null, true, nodeInfo.indexedHeight);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to fetch current node height.';
@@ -213,7 +209,7 @@ function App() {
       snapshot.nextHeight,
       snapshot.stats,
       false,
-      getIndexedHeight(snapshot.nodeInfo) ?? undefined,
+      snapshot.nodeInfo?.indexedHeight,
     );
   };
 
@@ -233,8 +229,8 @@ function App() {
     try {
       const latestNodeInfo = await fetchNodeInfo(DEFAULT_ERGO_NODE_URL);
       const previousNodeInfo = snapshot.nodeInfo;
-      const latestIndexedHeight = getIndexedHeight(latestNodeInfo);
-      const previousIndexedHeight = getIndexedHeight(previousNodeInfo);
+      const latestIndexedHeight = latestNodeInfo.indexedHeight;
+      const previousIndexedHeight = previousNodeInfo?.indexedHeight;
 
       if (!previousNodeInfo) {
         setState((current) => ({ ...current, nodeInfo: latestNodeInfo }));
@@ -249,7 +245,7 @@ function App() {
         setState((current) =>
           current.nodeInfo?.bestHeaderId === latestNodeInfo.bestHeaderId &&
           current.nodeInfo?.fullHeight === latestNodeInfo.fullHeight &&
-          getIndexedHeight(current.nodeInfo) === latestIndexedHeight
+          current.nodeInfo?.indexedHeight === latestIndexedHeight
             ? current
             : { ...current, nodeInfo: latestNodeInfo },
         );
@@ -258,8 +254,8 @@ function App() {
 
       if (
         latestNodeInfo.fullHeight < previousNodeInfo.fullHeight ||
-        (latestIndexedHeight !== null &&
-          previousIndexedHeight !== null &&
+        (typeof latestIndexedHeight === 'number' &&
+          typeof previousIndexedHeight === 'number' &&
           latestIndexedHeight < previousIndexedHeight)
       ) {
         await reloadLatestRef.current();
@@ -267,8 +263,8 @@ function App() {
       }
 
       if (
-        latestIndexedHeight === null ||
-        previousIndexedHeight === null ||
+        typeof latestIndexedHeight !== 'number' ||
+        typeof previousIndexedHeight !== 'number' ||
         latestIndexedHeight === previousIndexedHeight
       ) {
         setState((current) => ({
@@ -288,7 +284,7 @@ function App() {
 
       startTransition(() => {
         setState((current) => {
-          const currentIndexedHeight = getIndexedHeight(current.nodeInfo) ?? -1;
+          const currentIndexedHeight = current.nodeInfo?.indexedHeight ?? -1;
           if (currentIndexedHeight >= latestIndexedHeight) {
             return {
               ...current,
@@ -455,7 +451,7 @@ function App() {
           <strong>{state.nodeInfo ? formatCount(state.nodeInfo.fullHeight) : '...'}</strong>
           <p>
             {state.nodeInfo
-              ? `Indexed ${formatCount(getIndexedHeight(state.nodeInfo) ?? state.nodeInfo.fullHeight)}`
+              ? `Indexed ${formatCount(state.nodeInfo.indexedHeight)}`
               : DEFAULT_ERGO_NODE_URL}
           </p>
         </article>

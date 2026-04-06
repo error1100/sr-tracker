@@ -124,9 +124,6 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
 const hasRentMarker = (extension?: Record<string, string> | null) =>
   Boolean(extension && Object.prototype.hasOwnProperty.call(extension, '127'));
 
-const getBoxAddress = (box: Pick<TransactionBox, 'address' | 'ergoTree'>) =>
-  box.address?.trim() || box.ergoTree;
-
 const fetchBlockHeaders = async (
   nodeUrl: string,
   fromHeight: number,
@@ -269,51 +266,30 @@ const buildAssetSummaries = (assetAmounts: Map<string, number>): CollectedAssetS
     .map(([tokenId, amount]) => ({ tokenId, amount }))
     .sort((left, right) => Math.abs(right.amount) - Math.abs(left.amount) || left.tokenId.localeCompare(right.tokenId));
 
-const mergeRecipientsByAddress = (recipients: RecipientAccumulator[]) => {
-  const grouped = new Map<string, RecipientAccumulator>();
-
-  recipients.forEach((recipient) => {
-    const key = `${recipient.kind}:${recipient.address}`;
-    const existing = grouped.get(key);
-
-    if (existing) {
-      existing.nanoErg += recipient.nanoErg;
-      existing.outputCount += recipient.outputCount;
-      mergeAssetAmounts(existing.assetAmounts, recipient.assetAmounts);
-      return;
-    }
-
-    grouped.set(key, {
-      ...recipient,
-      assetAmounts: new Map(recipient.assetAmounts),
-    });
-  });
-
-  return Array.from(grouped.values()).map((recipient) => ({
+const finalizeRecipients = (recipients: Map<string, RecipientAccumulator>) =>
+  Array.from(recipients.values()).map((recipient) => ({
     kind: recipient.kind,
     address: recipient.address,
     nanoErg: recipient.nanoErg,
     outputCount: recipient.outputCount,
     assets: buildAssetSummaries(recipient.assetAmounts),
   }));
-};
 
 const buildRecipientGroups = (
-  rentInputErgoTrees: Set<string>,
-  collectorInputNanoErgByErgoTree: Map<string, number>,
-  collectorInputAddressByErgoTree: Map<string, string>,
-  collectorInputAssetsByErgoTree: Map<string, Map<string, number>>,
+  excludedRentInputTrees: Set<string>,
+  collectorInputNanoErgByAddress: Map<string, number>,
+  collectorInputAssetsByAddress: Map<string, Map<string, number>>,
   resolvedOutputs: TransactionBox[],
 ) => {
   const collectorRecipients = new Map<string, RecipientAccumulator>();
   const minerRecipients = new Map<string, RecipientAccumulator>();
 
   resolvedOutputs.forEach((output) => {
-    if (rentInputErgoTrees.has(output.ergoTree)) {
+    if (excludedRentInputTrees.has(output.ergoTree)) {
       return;
     }
 
-    const address = getBoxAddress(output);
+    const address = output.address;
 
     if (output.ergoTree === MINER_FEE_ERGO_TREE) {
       const key = address;
@@ -336,7 +312,7 @@ const buildRecipientGroups = (
       return;
     }
 
-    const existingCollector = collectorRecipients.get(output.ergoTree);
+    const existingCollector = collectorRecipients.get(address);
     if (existingCollector) {
       existingCollector.nanoErg += output.value;
       existingCollector.outputCount += 1;
@@ -344,7 +320,7 @@ const buildRecipientGroups = (
       return;
     }
 
-    collectorRecipients.set(output.ergoTree, {
+    collectorRecipients.set(address, {
       kind: 'collector',
       address,
       nanoErg: output.value,
@@ -353,10 +329,9 @@ const buildRecipientGroups = (
     });
   });
 
-  collectorInputNanoErgByErgoTree.forEach((inputNanoErg, ergoTree) => {
-    const address = collectorInputAddressByErgoTree.get(ergoTree) ?? ergoTree;
-    const existingCollector = collectorRecipients.get(ergoTree);
-    const inputAssetAmounts = collectorInputAssetsByErgoTree.get(ergoTree) ?? new Map<string, number>();
+  collectorInputNanoErgByAddress.forEach((inputNanoErg, address) => {
+    const existingCollector = collectorRecipients.get(address);
+    const inputAssetAmounts = collectorInputAssetsByAddress.get(address) ?? new Map<string, number>();
 
     if (existingCollector) {
       existingCollector.nanoErg -= inputNanoErg;
@@ -364,7 +339,7 @@ const buildRecipientGroups = (
       return;
     }
 
-    collectorRecipients.set(ergoTree, {
+    collectorRecipients.set(address, {
       kind: 'collector',
       address,
       nanoErg: -inputNanoErg,
@@ -375,12 +350,8 @@ const buildRecipientGroups = (
     });
   });
 
-  const collectors = mergeRecipientsByAddress(Array.from(collectorRecipients.values())).sort(
-    sortRecipients,
-  );
-  const minerFees = mergeRecipientsByAddress(Array.from(minerRecipients.values())).sort(
-    sortRecipients,
-  );
+  const collectors = finalizeRecipients(collectorRecipients).sort(sortRecipients);
+  const minerFees = finalizeRecipients(minerRecipients).sort(sortRecipients);
   const collectedAssetAmounts = new Map<string, number>();
 
   collectors.forEach((collector) => {
@@ -413,37 +384,33 @@ const buildEvent = (
     hasRentMarker(input.spendingProof?.extension),
   );
   const rentInputCount = rentInputs.length;
-  const rentInputErgoTrees = new Set(rentInputs.map((input) => input.ergoTree));
-  const collectorInputNanoErgByErgoTree = new Map<string, number>();
-  const collectorInputAddressByErgoTree = new Map<string, string>();
-  const collectorInputAssetsByErgoTree = new Map<string, Map<string, number>>();
+  const excludedRentInputTrees = new Set(rentInputs.map((input) => input.ergoTree));
+  const collectorInputNanoErgByAddress = new Map<string, number>();
+  const collectorInputAssetsByAddress = new Map<string, Map<string, number>>();
 
   transaction.inputs.forEach((input) => {
     if (hasRentMarker(input.spendingProof?.extension) || input.ergoTree === MINER_FEE_ERGO_TREE) {
       return;
     }
 
-    collectorInputNanoErgByErgoTree.set(
-      input.ergoTree,
-      (collectorInputNanoErgByErgoTree.get(input.ergoTree) ?? 0) + input.value,
+    collectorInputNanoErgByAddress.set(
+      input.address,
+      (collectorInputNanoErgByAddress.get(input.address) ?? 0) + input.value,
     );
-    if (!collectorInputAddressByErgoTree.has(input.ergoTree)) {
-      collectorInputAddressByErgoTree.set(input.ergoTree, getBoxAddress(input));
+
+    if (!collectorInputAssetsByAddress.has(input.address)) {
+      collectorInputAssetsByAddress.set(input.address, new Map());
     }
 
-    if (!collectorInputAssetsByErgoTree.has(input.ergoTree)) {
-      collectorInputAssetsByErgoTree.set(input.ergoTree, new Map());
-    }
-
-    addAssetAmounts(collectorInputAssetsByErgoTree.get(input.ergoTree)!, input.assets);
+    addAssetAmounts(collectorInputAssetsByAddress.get(input.address)!, input.assets);
   });
 
   const isCollectorOutput = (output: TransactionBox) =>
-    !rentInputErgoTrees.has(output.ergoTree) && output.ergoTree !== MINER_FEE_ERGO_TREE;
+    !excludedRentInputTrees.has(output.ergoTree) && output.ergoTree !== MINER_FEE_ERGO_TREE;
   const collectorOutputs = transaction.outputs.filter(isCollectorOutput);
   const minerOutputs = transaction.outputs.filter(
     (output) =>
-      !rentInputErgoTrees.has(output.ergoTree) && output.ergoTree === MINER_FEE_ERGO_TREE,
+      !excludedRentInputTrees.has(output.ergoTree) && output.ergoTree === MINER_FEE_ERGO_TREE,
   );
   const resolvedOutputs: TransactionBox[] = [...minerOutputs];
   const chainTxIds = new Set<string>();
@@ -455,10 +422,9 @@ const buildEvent = (
   }
 
   const { collectors, minerFees, collectedAssets } = buildRecipientGroups(
-    rentInputErgoTrees,
-    collectorInputNanoErgByErgoTree,
-    collectorInputAddressByErgoTree,
-    collectorInputAssetsByErgoTree,
+    excludedRentInputTrees,
+    collectorInputNanoErgByAddress,
+    collectorInputAssetsByAddress,
     resolvedOutputs,
   );
 
@@ -600,14 +566,9 @@ export const fetchNodeInfo = async (nodeUrl: string) => {
   const indexedHeight = await fetchIndexedHeight(nodeUrl, info);
 
   return {
-    name: info.name,
-    network: info.network,
     fullHeight: info.fullHeight,
-    headersHeight: info.headersHeight,
     bestHeaderId: info.bestHeaderId,
     indexedHeight,
-    maxIndexedHeight:
-      typeof info.maxIndexedHeight === 'number' ? info.maxIndexedHeight : undefined,
   };
 };
 

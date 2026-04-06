@@ -1,11 +1,7 @@
 export interface ErgoNodeInfo {
-  name: string;
-  network: string;
   fullHeight: number;
-  headersHeight: number;
   bestHeaderId: string;
   indexedHeight?: number;
-  maxIndexedHeight?: number;
 }
 
 export interface BlockHeader {
@@ -22,36 +18,6 @@ export interface SpendingProof {
 export interface ErgoAsset {
   tokenId: string;
   amount: number;
-}
-
-export interface BlockTransactionInput {
-  boxId: string;
-  spendingProof?: SpendingProof | null;
-}
-
-export interface BlockTransactionOutput {
-  boxId: string;
-  value: number;
-  ergoTree: string;
-  assets: ErgoAsset[];
-  creationHeight: number;
-  transactionId: string;
-  index: number;
-}
-
-export interface BlockTransactionSummary {
-  id: string;
-  inputs: BlockTransactionInput[];
-  dataInputs: { boxId: string }[];
-  outputs: BlockTransactionOutput[];
-  size: number;
-}
-
-export interface BlockTransactions {
-  headerId: string;
-  transactions: BlockTransactionSummary[];
-  blockVersion: number;
-  size: number;
 }
 
 export interface TransactionBox {
@@ -89,7 +55,6 @@ export interface IndexedBlock {
 
 export interface IndexedHeightInfo {
   indexedHeight: number;
-  fullHeight?: number;
 }
 
 export interface IndexedToken {
