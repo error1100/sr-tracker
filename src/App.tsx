@@ -17,6 +17,7 @@ import type { LoadedStats, RentCollectionEvent } from './types/rent';
 import {
   formatAssetAmount,
   formatCount,
+  formatDateTime,
   formatErg,
   formatHeightRange,
   formatTokenLabel,
@@ -103,8 +104,7 @@ const recipientLabel = (kind: RentCollectionEvent['collectors'][number]['kind'])
 const recipientShortLabel = (kind: RentCollectionEvent['collectors'][number]['kind']) =>
   kind === 'minerFee' ? 'M' : 'C';
 
-const formatRecipientAddress = (address: string) =>
-  address.length > 80 ? shortenId(address, 24) : address;
+const formatRecipientAddress = (address: string) => shortenId(address);
 
 function App() {
   const [state, setState] = useState<AppState>(initialState);
@@ -499,6 +499,7 @@ function App() {
             <table className="events-table">
               <thead>
                 <tr>
+                  <th>Time</th>
                   <th>Tx</th>
                   <th>Recipient Summary</th>
                 </tr>
@@ -509,6 +510,9 @@ function App() {
 
                   return (
                     <tr key={event.txId}>
+                      <td className="time-cell" title={new Date(event.timestamp).toISOString()}>
+                        {formatDateTime(event.timestamp)}
+                      </td>
                       <td className="tx-cell">
                         <div className="tx-stack">
                           <a
@@ -516,8 +520,9 @@ function App() {
                             href={`${EXPLORER_UI_URL}/en/transactions/${event.txId}`}
                             target="_blank"
                             rel="noreferrer"
+                            title={event.txId}
                           >
-                            {event.txId}
+                            {shortenId(event.txId)}
                           </a>
                           {event.chainTxIds.length ? (
                             <div className="chain-link-list">
@@ -528,8 +533,9 @@ function App() {
                                   key={`${event.txId}-${chainTxId}`}
                                   target="_blank"
                                   rel="noreferrer"
+                                  title={chainTxId}
                                 >
-                                  {chainTxId}
+                                  {shortenId(chainTxId)}
                                 </a>
                               ))}
                             </div>

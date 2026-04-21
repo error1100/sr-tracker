@@ -24,11 +24,17 @@ export const formatAssetAmount = (amount: number, decimals = 0) => {
   return `${isNegative ? '-' : ''}${integerFormatter.format(Number(wholePart))}${fractionalPart ? `.${fractionalPart}` : ''}`;
 };
 
+const dateTimeFormatter = new Intl.DateTimeFormat('de-DE', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 export const formatDateTime = (timestamp: number) =>
-  new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(timestamp);
+  dateTimeFormatter.format(timestamp).replace(',', '');
 
 export const shortenId = (value: string, visible = 10) => {
   if (value.length <= visible * 2) {
