@@ -35,6 +35,18 @@ interface AppState {
   error: string | null;
 }
 
+type AppPage = 'transactions' | 'daily-addresses';
+
+interface DailyAddressTotal {
+  day: string;
+  address: string;
+  nanoErg: number;
+  transactionCount: number;
+  outputCount: number;
+  highestHeight: number;
+  lowestHeight: number;
+}
+
 const emptyStats: LoadedStats = {
   scannedBlocks: 0,
   rentTransactions: 0,
@@ -44,6 +56,8 @@ const emptyStats: LoadedStats = {
   totalMinerNanoErg: 0,
   highestHeight: null,
   lowestHeight: null,
+  highestBlockTimestamp: null,
+  lowestBlockTimestamp: null,
   collectorAddresses: [],
 };
 
@@ -56,6 +70,21 @@ const initialState: AppState = {
   loadingInitial: true,
   loadingMore: false,
   error: null,
+};
+
+const pageHashById: Record<AppPage, string> = {
+  transactions: '#/transactions',
+  'daily-addresses': '#/daily-addresses',
+};
+
+const readActivePageFromHash = (): AppPage => {
+  if (typeof window === 'undefined') {
+    return 'transactions';
+  }
+
+  return window.location.hash === pageHashById['daily-addresses']
+    ? 'daily-addresses'
+    : 'transactions';
 };
 
 const mergeSlice = (state: AppState, slice: RentCollectionSlice): AppState => ({
@@ -106,15 +135,80 @@ const recipientShortLabel = (kind: RentCollectionEvent['collectors'][number]['ki
 
 const formatRecipientAddress = (address: string) => shortenId(address);
 
+const getLocalDay = (timestamp: number) => {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+};
+
+const getStartOfLocalDay = (timestamp = Date.now()) => {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+
+  return date.getTime();
+};
+
+const hasLoadedBlockBeforeBoundary = (
+  lowestBlockTimestamp: number | null,
+  boundaryTimestamp: number,
+) => lowestBlockTimestamp !== null && lowestBlockTimestamp < boundaryTimestamp;
+
+const buildDailyAddressTotals = (events: RentCollectionEvent[]): DailyAddressTotal[] => {
+  const totals = new Map<string, DailyAddressTotal>();
+
+  events.forEach((event) => {
+    const day = getLocalDay(event.timestamp);
+
+    event.collectors.forEach((collector) => {
+      const key = `${day}:${collector.address}`;
+      const existing = totals.get(key);
+
+      if (existing) {
+        existing.nanoErg += collector.nanoErg;
+        existing.transactionCount += 1;
+        existing.outputCount += collector.outputCount;
+        existing.highestHeight = Math.max(existing.highestHeight, event.blockHeight);
+        existing.lowestHeight = Math.min(existing.lowestHeight, event.blockHeight);
+        return;
+      }
+
+      totals.set(key, {
+        day,
+        address: collector.address,
+        nanoErg: collector.nanoErg,
+        transactionCount: 1,
+        outputCount: collector.outputCount,
+        highestHeight: event.blockHeight,
+        lowestHeight: event.blockHeight,
+      });
+    });
+  });
+
+  return Array.from(totals.values()).sort(
+    (left, right) =>
+      right.day.localeCompare(left.day) ||
+      right.nanoErg - left.nanoErg ||
+      left.address.localeCompare(right.address),
+  );
+};
+
 function App() {
   const [state, setState] = useState<AppState>(initialState);
+  const [activePage, setActivePage] = useState<AppPage>(() => readActivePageFromHash());
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [dailyLoadBoundaryTimestamp, setDailyLoadBoundaryTimestamp] = useState<number | null>(
+    null,
+  );
   const [tokenMetadata, setTokenMetadata] = useState<Record<string, IndexedToken>>(
     () => getCachedTokenMetadata(),
   );
   const stateRef = useRef(state);
   const bootstrappedRef = useRef(false);
   const pollInFlightRef = useRef(false);
+  const dailyAutoLoadAttemptHeightRef = useRef<number | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const reloadLatestRef = useRef<() => Promise<void>>(async () => {});
   const loadMoreRef = useRef<() => Promise<void>>(async () => {});
@@ -123,6 +217,16 @@ function App() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActivePage(readActivePageFromHash());
+    };
+
+    handleHashChange();
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const loadSlice = async (
     fromHeight: number,
@@ -167,6 +271,8 @@ function App() {
   };
 
   const reloadLatest = async () => {
+    dailyAutoLoadAttemptHeightRef.current = null;
+    setDailyLoadBoundaryTimestamp(null);
     setState((current) => ({
       ...current,
       events: [],
@@ -211,6 +317,13 @@ function App() {
       false,
       snapshot.nodeInfo?.indexedHeight,
     );
+  };
+
+  const loadOneMoreDay = () => {
+    const lowestBlockTimestamp = stateRef.current.stats.lowestBlockTimestamp;
+
+    dailyAutoLoadAttemptHeightRef.current = null;
+    setDailyLoadBoundaryTimestamp(getStartOfLocalDay(lowestBlockTimestamp ?? Date.now()));
   };
 
   const checkForNewBlocks = async () => {
@@ -303,6 +416,8 @@ function App() {
               range.events,
               range.highestHeight,
               range.lowestHeight,
+              range.highestBlockTimestamp,
+              range.lowestBlockTimestamp,
             ),
             error: null,
           };
@@ -335,6 +450,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (activePage === 'daily-addresses') {
+      return;
+    }
+
     const target = sentinelRef.current;
     if (!target) {
       return;
@@ -352,7 +471,7 @@ function App() {
 
     observer.observe(target);
     return () => observer.disconnect();
-  }, []);
+  }, [activePage]);
 
   useEffect(() => {
     if (!autoRefreshEnabled) {
@@ -368,9 +487,52 @@ function App() {
     return () => window.clearInterval(intervalId);
   }, [autoRefreshEnabled]);
 
+  useEffect(() => {
+    const loadBoundaryTimestamp = dailyLoadBoundaryTimestamp ?? getStartOfLocalDay();
+
+    if (
+      activePage !== 'daily-addresses' ||
+      state.loadingInitial ||
+      state.loadingMore ||
+      !state.hasMore ||
+      state.nextHeight === null ||
+      hasLoadedBlockBeforeBoundary(state.stats.lowestBlockTimestamp, loadBoundaryTimestamp)
+    ) {
+      return;
+    }
+
+    if (state.error && dailyAutoLoadAttemptHeightRef.current === state.nextHeight) {
+      return;
+    }
+
+    dailyAutoLoadAttemptHeightRef.current = state.nextHeight;
+    void loadMoreRef.current();
+  }, [
+    activePage,
+    dailyLoadBoundaryTimestamp,
+    state.error,
+    state.hasMore,
+    state.loadingInitial,
+    state.loadingMore,
+    state.nextHeight,
+    state.stats.lowestBlockTimestamp,
+  ]);
+
   const headerRange = useMemo(
     () => formatHeightRange(state.stats.highestHeight, state.stats.lowestHeight),
     [state.stats.highestHeight, state.stats.lowestHeight],
+  );
+  const dailyAddressTotals = useMemo(
+    () => buildDailyAddressTotals(state.events),
+    [state.events],
+  );
+  const dailyAddressStats = useMemo(
+    () => ({
+      addressCount: new Set(dailyAddressTotals.map((total) => total.address)).size,
+      dayCount: new Set(dailyAddressTotals.map((total) => total.day)).size,
+      totalNanoErg: dailyAddressTotals.reduce((sum, total) => sum + total.nanoErg, 0),
+    }),
+    [dailyAddressTotals],
   );
   const recipientAssetTokenIds = useMemo(
     () =>
@@ -445,6 +607,21 @@ function App() {
         </div>
       </section>
 
+      <nav className="view-nav" aria-label="Storage rent views">
+        <a
+          className={`view-tab ${activePage === 'transactions' ? 'view-tab-active' : ''}`}
+          href={pageHashById.transactions}
+        >
+          Transactions
+        </a>
+        <a
+          className={`view-tab ${activePage === 'daily-addresses' ? 'view-tab-active' : ''}`}
+          href={pageHashById['daily-addresses']}
+        >
+          Daily by address
+        </a>
+      </nav>
+
       <section className="stats-grid">
         <article className="stat-card">
           <span className="label">Current Height</span>
@@ -493,7 +670,81 @@ function App() {
         </section>
       ) : null}
 
-      {state.events.length ? (
+      {state.events.length && activePage === 'daily-addresses' ? (
+        <>
+          <section className="stats-grid daily-stats-grid">
+            <article className="stat-card">
+              <span className="label">Days</span>
+              <strong>{formatCount(dailyAddressStats.dayCount)}</strong>
+              <p>{formatCount(dailyAddressTotals.length)} address-day rows</p>
+            </article>
+            <article className="stat-card">
+              <span className="label">Collector Addresses</span>
+              <strong>{formatCount(dailyAddressStats.addressCount)}</strong>
+              <p>Loaded range only</p>
+            </article>
+            <article className="stat-card stat-card-accent">
+              <span className="label">Collector ERG</span>
+              <strong>{formatErg(dailyAddressStats.totalNanoErg)}</strong>
+              <p>Net daily sum across loaded collectors</p>
+            </article>
+          </section>
+
+          {dailyAddressTotals.length ? (
+            <section className="events-table-shell">
+              <div className="events-table-scroll">
+                <table className="events-table daily-address-table">
+                  <thead>
+                    <tr>
+                      <th>Day</th>
+                      <th>Address</th>
+                      <th className="number-cell">Collector ERG</th>
+                      <th className="number-cell">Rent Txs</th>
+                      <th className="number-cell">Outputs</th>
+                      <th>Height Range</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyAddressTotals.map((total) => (
+                      <tr key={`${total.day}-${total.address}`}>
+                        <td className="time-cell">{total.day}</td>
+                        <td className="address-cell">
+                          <a
+                            className="address-link"
+                            href={`${EXPLORER_UI_URL}/en/addresses/${total.address}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={total.address}
+                          >
+                            {shortenId(total.address, 12)}
+                          </a>
+                        </td>
+                        <td
+                          className={`number-cell erg-total-cell ${
+                            total.nanoErg < 0 ? 'negative-amount' : ''
+                          }`}
+                        >
+                          {formatErg(total.nanoErg)}
+                        </td>
+                        <td className="number-cell">{formatCount(total.transactionCount)}</td>
+                        <td className="number-cell">{formatCount(total.outputCount)}</td>
+                        <td>{formatHeightRange(total.highestHeight, total.lowestHeight)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : (
+            <section className="empty-state">
+              <h2>No collector address totals in the loaded range.</h2>
+              <p>Load older blocks to continue scanning.</p>
+            </section>
+          )}
+        </>
+      ) : null}
+
+      {state.events.length && activePage === 'transactions' ? (
         <section className="events-table-shell">
           <div className="events-table-scroll">
             <table className="events-table">
@@ -614,9 +865,19 @@ function App() {
           <button
             className="secondary-button"
             disabled={state.loadingMore}
-            onClick={() => void loadMoreRef.current()}
+            onClick={
+              activePage === 'daily-addresses'
+                ? loadOneMoreDay
+                : () => void loadMoreRef.current()
+            }
           >
-            {state.loadingMore ? 'Loading older blocks...' : 'Load older blocks'}
+            {state.loadingMore
+              ? activePage === 'daily-addresses'
+                ? 'Loading another day...'
+                : 'Loading older blocks...'
+              : activePage === 'daily-addresses'
+                ? 'Load one more day'
+                : 'Load older blocks'}
           </button>
         </div>
       ) : null}

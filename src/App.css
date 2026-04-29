@@ -105,6 +105,43 @@
   opacity: 0.72;
 }
 
+.view-nav {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin-top: 0.8rem;
+  padding: 0.22rem;
+  border: 1px solid rgba(214, 226, 255, 0.12);
+  border-radius: 0.82rem;
+  background: rgba(8, 16, 31, 0.68);
+}
+
+.view-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.1rem;
+  padding: 0.42rem 0.72rem;
+  border-radius: 0.62rem;
+  color: #b7c7dd;
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.view-tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f8ff;
+}
+
+.view-tab-active {
+  background: rgba(148, 213, 109, 0.16);
+  color: #f2fff6;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -224,6 +261,46 @@
 
 .events-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.daily-stats-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.daily-address-table {
+  min-width: 840px;
+}
+
+.address-cell {
+  min-width: 18rem;
+}
+
+.address-link {
+  color: #f4fbff;
+  font-family:
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.events-table .number-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.erg-total-cell {
+  color: #a9c8b6;
+  font-family:
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+}
+
+.negative-amount {
+  color: #efb7b7;
 }
 
 .tx-cell {
@@ -423,6 +500,7 @@
 
   .tx-cell,
   .time-cell,
+  .address-cell,
   .recipient-cell {
     min-width: 0;
     width: auto;

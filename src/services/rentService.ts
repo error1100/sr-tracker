@@ -27,6 +27,8 @@ export interface RentCollectionRange {
   scannedBlocks: number;
   highestHeight: number | null;
   lowestHeight: number | null;
+  highestBlockTimestamp: number | null;
+  lowestBlockTimestamp: number | null;
 }
 
 interface BlockChainContext {
@@ -58,6 +60,8 @@ const createEmptyStats = (): LoadedStats => ({
   totalMinerNanoErg: 0,
   highestHeight: null,
   lowestHeight: null,
+  highestBlockTimestamp: null,
+  lowestBlockTimestamp: null,
   collectorAddresses: [],
 });
 
@@ -450,6 +454,8 @@ export const accumulateLoadedStats = (
   events: RentCollectionEvent[],
   highestHeight: number | null,
   lowestHeight: number | null,
+  highestBlockTimestamp: number | null,
+  lowestBlockTimestamp: number | null,
 ): LoadedStats => {
   const base = previous ?? createEmptyStats();
   const collectorAddresses = new Set(base.collectorAddresses);
@@ -481,6 +487,18 @@ export const accumulateLoadedStats = (
         : lowestHeight === null
           ? base.lowestHeight
           : Math.min(base.lowestHeight, lowestHeight),
+    highestBlockTimestamp:
+      base.highestBlockTimestamp === null
+        ? highestBlockTimestamp
+        : highestBlockTimestamp === null
+          ? base.highestBlockTimestamp
+          : Math.max(base.highestBlockTimestamp, highestBlockTimestamp),
+    lowestBlockTimestamp:
+      base.lowestBlockTimestamp === null
+        ? lowestBlockTimestamp
+        : lowestBlockTimestamp === null
+          ? base.lowestBlockTimestamp
+          : Math.min(base.lowestBlockTimestamp, lowestBlockTimestamp),
     collectorAddresses: Array.from(collectorAddresses),
   };
 };
@@ -537,15 +555,30 @@ export const fetchRentCollectionRange = async (
   const normalizedToHeight = Math.min(Math.max(0, toHeight), effectiveIndexedHeight);
 
   if (normalizedToHeight < normalizedFromHeight) {
-    return { events: [], scannedBlocks: 0, highestHeight: null, lowestHeight: null };
+    return {
+      events: [],
+      scannedBlocks: 0,
+      highestHeight: null,
+      lowestHeight: null,
+      highestBlockTimestamp: null,
+      lowestBlockTimestamp: null,
+    };
   }
 
   const headers = await fetchBlockHeaders(nodeUrl, normalizedFromHeight, normalizedToHeight);
   if (!headers.length) {
-    return { events: [], scannedBlocks: 0, highestHeight: null, lowestHeight: null };
+    return {
+      events: [],
+      scannedBlocks: 0,
+      highestHeight: null,
+      lowestHeight: null,
+      highestBlockTimestamp: null,
+      lowestBlockTimestamp: null,
+    };
   }
 
   const sortedHeaders = [...headers].sort((left, right) => right.height - left.height);
+  const headerTimestamps = sortedHeaders.map((header) => header.timestamp);
   const processedBlocks = await Promise.all(
     sortedHeaders.map((header) => fetchProcessedBlock(nodeUrl, header)),
   );
@@ -558,6 +591,8 @@ export const fetchRentCollectionRange = async (
     scannedBlocks: headers.length,
     highestHeight: sortedHeaders[0]?.height ?? null,
     lowestHeight: sortedHeaders[sortedHeaders.length - 1]?.height ?? null,
+    highestBlockTimestamp: Math.max(...headerTimestamps),
+    lowestBlockTimestamp: Math.min(...headerTimestamps),
   };
 };
 
@@ -605,6 +640,8 @@ export const fetchRentCollectionSlice = async (
     range.events,
     range.highestHeight,
     range.lowestHeight,
+    range.highestBlockTimestamp,
+    range.lowestBlockTimestamp,
   );
   return {
     events: range.events,

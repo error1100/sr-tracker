@@ -35,5 +35,7 @@ export interface LoadedStats {
   totalMinerNanoErg: number;
   highestHeight: number | null;
   lowestHeight: number | null;
+  highestBlockTimestamp: number | null;
+  lowestBlockTimestamp: number | null;
   collectorAddresses: string[];
 }
