@@ -11,6 +11,12 @@ export interface RecipientSummary {
   assets: CollectedAssetSummary[];
 }
 
+export interface DailyCollectorSummary {
+  address: string;
+  nanoErg: number;
+  outputCount: number;
+}
+
 export interface RentCollectionEvent {
   txId: string;
   blockId: string;
@@ -20,6 +26,7 @@ export interface RentCollectionEvent {
   rentInputCount: number;
   chainTxIds: string[];
   collectors: RecipientSummary[];
+  dailyCollectors?: DailyCollectorSummary[];
   minerFees: RecipientSummary[];
   collectedAssets: CollectedAssetSummary[];
   totalCollectorNanoErg: number;

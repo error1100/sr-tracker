@@ -161,8 +161,9 @@ const buildDailyAddressTotals = (events: RentCollectionEvent[]): DailyAddressTot
 
   events.forEach((event) => {
     const day = getLocalDay(event.timestamp);
+    const dailyCollectors = event.dailyCollectors ?? event.collectors;
 
-    event.collectors.forEach((collector) => {
+    dailyCollectors.forEach((collector) => {
       const key = `${day}:${collector.address}`;
       const existing = totals.get(key);
 

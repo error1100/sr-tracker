@@ -10,6 +10,7 @@ import type {
 } from '../types/ergoNode';
 import type {
   CollectedAssetSummary,
+  DailyCollectorSummary,
   LoadedStats,
   RecipientSummary,
   RentCollectionEvent,
@@ -46,7 +47,7 @@ interface CachedProcessedBlock {
 const processedBlockCache = new Map<string, CachedProcessedBlock>();
 const processedBlockRequestCache = new Map<string, Promise<CachedProcessedBlock>>();
 
-const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v3';
+const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v4';
 const MAX_CACHED_PROCESSED_BLOCKS = 400;
 
 let processedBlockCacheHydrated = false;
@@ -188,6 +189,12 @@ interface RecipientAccumulator {
   assetAmounts: Map<string, number>;
 }
 
+interface DailyCollectorAccumulator {
+  address: string;
+  nanoErg: number;
+  outputCount: number;
+}
+
 const sortTxIdsByBlockOrder = (txIds: Iterable<string>, blockContext: BlockChainContext) =>
   Array.from(new Set(txIds)).sort(
     (left, right) => (blockContext.txOrder.get(left) ?? 0) - (blockContext.txOrder.get(right) ?? 0),
@@ -279,6 +286,66 @@ const finalizeRecipients = (recipients: Map<string, RecipientAccumulator>) =>
     assets: buildAssetSummaries(recipient.assetAmounts),
   }));
 
+const allocateIntegerAmount = <T,>(
+  amount: number,
+  targets: T[],
+  getWeight: (target: T) => number,
+  applyAmount: (target: T, amount: number) => void,
+) => {
+  if (amount === 0 || !targets.length) {
+    return;
+  }
+
+  const weights = targets.map((target) => Math.max(0, Math.trunc(getWeight(target))));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+
+  if (totalWeight === 0) {
+    applyAmount(targets[targets.length - 1], amount);
+    return;
+  }
+
+  let remainingAmount = amount;
+
+  targets.forEach((target, index) => {
+    const isLastTarget = index === targets.length - 1;
+    const targetAmount = isLastTarget
+      ? remainingAmount
+      : Math.trunc((amount * weights[index]) / totalWeight);
+
+    if (targetAmount !== 0) {
+      applyAmount(target, targetAmount);
+    }
+
+    remainingAmount -= targetAmount;
+  });
+};
+
+const buildDailyCollectors = (
+  collectorOutputsByAddress: Map<string, DailyCollectorAccumulator>,
+  collectorInputNanoErgByAddress: Map<string, number>,
+): DailyCollectorSummary[] => {
+  const outputCollectors = Array.from(collectorOutputsByAddress.values()).sort((left, right) =>
+    left.address.localeCompare(right.address),
+  );
+  const collectorInputNanoErg = Array.from(collectorInputNanoErgByAddress.values()).reduce(
+    (sum, inputNanoErg) => sum + inputNanoErg,
+    0,
+  );
+
+  allocateIntegerAmount(
+    -collectorInputNanoErg,
+    outputCollectors,
+    (collector) => collector.nanoErg,
+    (collector, amount) => {
+      collector.nanoErg += amount;
+    },
+  );
+
+  return outputCollectors
+    .filter((collector) => collector.nanoErg !== 0 || collector.outputCount !== 0)
+    .sort((left, right) => right.nanoErg - left.nanoErg || left.address.localeCompare(right.address));
+};
+
 const buildRecipientGroups = (
   excludedRentInputTrees: Set<string>,
   collectorInputNanoErgByAddress: Map<string, number>,
@@ -286,6 +353,7 @@ const buildRecipientGroups = (
   resolvedOutputs: TransactionBox[],
 ) => {
   const collectorRecipients = new Map<string, RecipientAccumulator>();
+  const collectorOutputsByAddress = new Map<string, DailyCollectorAccumulator>();
   const minerRecipients = new Map<string, RecipientAccumulator>();
 
   resolvedOutputs.forEach((output) => {
@@ -317,6 +385,18 @@ const buildRecipientGroups = (
     }
 
     const existingCollector = collectorRecipients.get(address);
+    const existingDailyCollector = collectorOutputsByAddress.get(address);
+    if (existingDailyCollector) {
+      existingDailyCollector.nanoErg += output.value;
+      existingDailyCollector.outputCount += 1;
+    } else {
+      collectorOutputsByAddress.set(address, {
+        address,
+        nanoErg: output.value,
+        outputCount: 1,
+      });
+    }
+
     if (existingCollector) {
       existingCollector.nanoErg += output.value;
       existingCollector.outputCount += 1;
@@ -355,6 +435,10 @@ const buildRecipientGroups = (
   });
 
   const collectors = finalizeRecipients(collectorRecipients).sort(sortRecipients);
+  const dailyCollectors = buildDailyCollectors(
+    collectorOutputsByAddress,
+    collectorInputNanoErgByAddress,
+  );
   const minerFees = finalizeRecipients(minerRecipients).sort(sortRecipients);
   const collectedAssetAmounts = new Map<string, number>();
 
@@ -372,6 +456,7 @@ const buildRecipientGroups = (
       (collector) =>
         collector.nanoErg !== 0 || collector.outputCount !== 0 || collector.assets.length > 0,
     ),
+    dailyCollectors,
     minerFees: minerFees.filter(
       (minerFee) =>
         minerFee.nanoErg !== 0 || minerFee.outputCount !== 0 || minerFee.assets.length > 0,
@@ -425,7 +510,7 @@ const buildEvent = (
     resolution.chainTxIds.forEach((txId) => chainTxIds.add(txId));
   }
 
-  const { collectors, minerFees, collectedAssets } = buildRecipientGroups(
+  const { collectors, dailyCollectors, minerFees, collectedAssets } = buildRecipientGroups(
     excludedRentInputTrees,
     collectorInputNanoErgByAddress,
     collectorInputAssetsByAddress,
@@ -441,6 +526,7 @@ const buildEvent = (
     rentInputCount,
     chainTxIds: sortTxIdsByBlockOrder(chainTxIds, blockContext),
     collectors,
+    dailyCollectors,
     minerFees,
     collectedAssets,
     totalCollectorNanoErg: collectors.reduce((sum, recipient) => sum + recipient.nanoErg, 0),

@@ -24,6 +24,10 @@ React + Vite frontend for scanning Ergo blocks newest-first and summarizing stor
   - collected output assets
   - minus assets from non-rent collector inputs
 - Net collector ERG can be negative when a collector adds extra value to complete the transaction.
+- Daily address totals assign each transaction's net collector ERG to collector output
+  addresses. Non-rent collector inputs are treated as transaction funding, so a later
+  storage-rent transaction does not move an earlier day's collected amount away from
+  the address that originally received it.
 
 ## Same-Block Chain Handling
 
