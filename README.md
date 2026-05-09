@@ -39,6 +39,7 @@ React + Vite frontend for scanning Ergo blocks newest-first and summarizing stor
 ## Address And Metadata Sources
 
 - Recipient addresses come directly from indexed block inputs and outputs.
+- Block miner addresses come from the already-loaded indexed block/header payload.
 - Token metadata is loaded lazily and cached locally in the browser.
 
 ## Caching And Refresh

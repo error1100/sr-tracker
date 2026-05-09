@@ -226,7 +226,7 @@
 
 .events-table {
   width: 100%;
-  min-width: 780px;
+  min-width: 920px;
   border-collapse: collapse;
 }
 
@@ -308,13 +308,20 @@
   min-width: 12rem;
 }
 
+.miner-cell {
+  width: 12rem;
+  min-width: 12rem;
+  color: #9db2cf;
+}
+
 .tx-stack {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
 }
 
-.tx-link {
+.tx-link,
+.miner-link {
   display: block;
   color: #f4fbff;
   font-family:
@@ -324,6 +331,10 @@
   font-size: 0.75rem;
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.miner-missing {
+  color: #6f819d;
 }
 
 .chain-link-list {
@@ -499,6 +510,7 @@
   }
 
   .tx-cell,
+  .miner-cell,
   .time-cell,
   .address-cell,
   .recipient-cell {

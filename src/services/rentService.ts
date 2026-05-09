@@ -47,8 +47,10 @@ interface CachedProcessedBlock {
 const processedBlockCache = new Map<string, CachedProcessedBlock>();
 const processedBlockRequestCache = new Map<string, Promise<CachedProcessedBlock>>();
 
-const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v4';
+const PROCESSED_BLOCK_CACHE_KEY = 'sr-tracker:processed-blocks:v5';
 const MAX_CACHED_PROCESSED_BLOCKS = 400;
+const MINER_REWARD_ERGO_TREE_PREFIX = '100204a00b08cd';
+const MINER_REWARD_ERGO_TREE_SUFFIX = 'ea02d192a39a8cc7a70173007301';
 
 let processedBlockCacheHydrated = false;
 
@@ -128,6 +130,50 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
 
 const hasRentMarker = (extension?: Record<string, string> | null) =>
   Boolean(extension && Object.prototype.hasOwnProperty.call(extension, '127'));
+
+const buildMinerRewardErgoTree = (publicKey?: string) => {
+  if (!publicKey || !/^[0-9a-f]{66}$/i.test(publicKey)) {
+    return null;
+  }
+
+  return `${MINER_REWARD_ERGO_TREE_PREFIX}${publicKey.toLowerCase()}${MINER_REWARD_ERGO_TREE_SUFFIX}`;
+};
+
+const findMinerRewardOutput = (
+  transactions: IndexedTransaction[],
+  minerRewardErgoTree: string,
+) => {
+  for (const transaction of transactions) {
+    const rewardOutput = transaction.outputs.find(
+      (output) => output.ergoTree.toLowerCase() === minerRewardErgoTree,
+    );
+
+    if (rewardOutput) {
+      return rewardOutput;
+    }
+  }
+
+  return null;
+};
+
+const deriveBlockMinerAddress = (indexedBlock: IndexedBlock, header: BlockHeader) => {
+  const minerRewardErgoTree = buildMinerRewardErgoTree(
+    indexedBlock.header.powSolutions?.pk ?? header.powSolutions?.pk,
+  );
+
+  if (!minerRewardErgoTree) {
+    return null;
+  }
+
+  const coinbaseTransaction = indexedBlock.transactions.find((transaction) => transaction.index === 0);
+  const coinbaseRewardOutput = coinbaseTransaction
+    ? findMinerRewardOutput([coinbaseTransaction], minerRewardErgoTree)
+    : null;
+  const rewardOutput =
+    coinbaseRewardOutput ?? findMinerRewardOutput(indexedBlock.transactions, minerRewardErgoTree);
+
+  return rewardOutput?.address ?? null;
+};
 
 const fetchBlockHeaders = async (
   nodeUrl: string,
@@ -468,6 +514,7 @@ const buildRecipientGroups = (
 const buildEvent = (
   transaction: IndexedTransaction,
   blockContext: BlockChainContext,
+  blockMinerAddress: string | null,
 ): RentCollectionEvent => {
   const rentInputs = transaction.inputs.filter((input) =>
     hasRentMarker(input.spendingProof?.extension),
@@ -523,6 +570,7 @@ const buildEvent = (
     blockHeight: transaction.inclusionHeight,
     timestamp: transaction.timestamp,
     txIndex: transaction.index,
+    blockMinerAddress,
     rentInputCount,
     chainTxIds: sortTxIdsByBlockOrder(chainTxIds, blockContext),
     collectors,
@@ -601,11 +649,12 @@ const fetchProcessedBlock = async (nodeUrl: string, header: BlockHeader) => {
     const request = (async () => {
       const indexedBlock = await fetchIndexedBlock(nodeUrl, header.id);
       const blockContext = buildBlockChainContext(indexedBlock.transactions);
+      const blockMinerAddress = deriveBlockMinerAddress(indexedBlock, header);
       const events = indexedBlock.transactions
         .filter((transaction) =>
           transaction.inputs.some((input) => hasRentMarker(input.spendingProof?.extension)),
         )
-        .map((transaction) => buildEvent(transaction, blockContext));
+        .map((transaction) => buildEvent(transaction, blockContext, blockMinerAddress));
 
       events.sort((left, right) => right.txIndex - left.txIndex);
 

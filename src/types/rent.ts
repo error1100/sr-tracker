@@ -23,6 +23,7 @@ export interface RentCollectionEvent {
   blockHeight: number;
   timestamp: number;
   txIndex: number;
+  blockMinerAddress: string | null;
   rentInputCount: number;
   chainTxIds: string[];
   collectors: RecipientSummary[];

@@ -753,6 +753,7 @@ function App() {
                 <tr>
                   <th>Time</th>
                   <th>Tx</th>
+                  <th>Miner</th>
                   <th>Recipient Summary</th>
                 </tr>
               </thead>
@@ -793,6 +794,21 @@ function App() {
                             </div>
                           ) : null}
                         </div>
+                      </td>
+                      <td className="miner-cell">
+                        {event.blockMinerAddress ? (
+                          <a
+                            className="miner-link"
+                            href={`${EXPLORER_UI_URL}/en/addresses/${event.blockMinerAddress}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={event.blockMinerAddress}
+                          >
+                            {shortenId(event.blockMinerAddress)}
+                          </a>
+                        ) : (
+                          <span className="miner-missing">-</span>
+                        )}
                       </td>
                       <td className="recipient-cell">
                         {recipients.length ? (

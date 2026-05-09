@@ -4,10 +4,15 @@ export interface ErgoNodeInfo {
   indexedHeight?: number;
 }
 
+export interface PowSolutions {
+  pk?: string;
+}
+
 export interface BlockHeader {
   id: string;
   height: number;
   timestamp: number;
+  powSolutions?: PowSolutions;
 }
 
 export interface SpendingProof {
