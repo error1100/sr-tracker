@@ -36,7 +36,57 @@
   display: flex;
   gap: 0.55rem;
   align-items: center;
+  flex-wrap: wrap;
   flex-shrink: 0;
+}
+
+.node-api-form {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.node-api-control {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.3rem 0.42rem 0.3rem 0.64rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(214, 226, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #d7e4f9;
+}
+
+.node-api-control span {
+  color: #8ba0bf;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.node-api-control input {
+  width: min(26rem, 34vw);
+  min-width: 13rem;
+  height: 2rem;
+  padding: 0 0.58rem;
+  border: 0;
+  border-radius: 0.55rem;
+  outline: 0;
+  background: rgba(5, 12, 23, 0.72);
+  color: #f3f8ff;
+  font-family:
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+  font-size: 0.76rem;
+}
+
+.node-api-control input:focus {
+  box-shadow: 0 0 0 2px rgba(103, 196, 135, 0.34);
 }
 
 .auto-refresh-toggle {
@@ -140,6 +190,10 @@
 .view-tab-active {
   background: rgba(148, 213, 109, 0.16);
   color: #f2fff6;
+}
+
+.compact-id-mobile {
+  display: none;
 }
 
 .stats-grid {
@@ -509,6 +563,20 @@
     justify-content: flex-start;
   }
 
+  .node-api-form {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .node-api-control {
+    flex: 1 1 20rem;
+  }
+
+  .node-api-control input {
+    width: 100%;
+    min-width: 0;
+  }
+
   .tx-cell,
   .miner-cell,
   .time-cell,
@@ -534,7 +602,92 @@
     padding: 1rem;
   }
 
+  .compact-id-desktop {
+    display: none;
+  }
+
+  .compact-id-mobile {
+    display: inline;
+  }
+
+  .events-table-shell {
+    border-radius: 0.75rem;
+  }
+
   .events-table {
-    min-width: 640px;
+    min-width: 100%;
+    table-layout: fixed;
+  }
+
+  .events-table th,
+  .events-table td {
+    padding: 0.46rem 0.34rem;
+    font-size: 0.68rem;
+  }
+
+  .events-table th {
+    letter-spacing: 0.04em;
+    font-size: 0.5rem;
+    white-space: normal;
+  }
+
+  .tx-cell,
+  .miner-cell {
+    width: 4.3rem;
+  }
+
+  .time-cell {
+    width: 4.8rem;
+    white-space: normal;
+  }
+
+  .address-cell {
+    width: 4.6rem;
+  }
+
+  .recipient-cell {
+    width: auto;
+  }
+
+  .tx-link,
+  .miner-link,
+  .chain-link,
+  .address-link,
+  .recipient-row-address {
+    font-size: 0.64rem;
+  }
+
+  .chain-link-list {
+    padding-left: 0.4rem;
+  }
+
+  .recipient-row-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.12rem;
+  }
+
+  .recipient-row-identity {
+    align-items: flex-start;
+  }
+
+  .recipient-kind-badge {
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 0.25rem;
+    font-size: 0.56rem;
+  }
+
+  .recipient-row-erg {
+    justify-self: start;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .recipient-row-assets {
+    padding-left: 0;
+  }
+
+  .events-table .number-cell {
+    white-space: normal;
   }
 }

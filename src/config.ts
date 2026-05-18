@@ -1,4 +1,4 @@
-export const DEFAULT_ERGO_NODE_URL = 'https://node-p2p.ergoplatform.com';
+export const DEFAULT_ERGO_NODE_URL = 'https://node-p2p.ergoplatform.com/';
 export const EXPLORER_UI_URL = 'https://explorer.ergoplatform.com';
 export const BLOCK_SLICE_SIZE = 50;
 export const MINER_FEE_ERGO_TREE =

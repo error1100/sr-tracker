@@ -72,9 +72,54 @@ const initialState: AppState = {
   error: null,
 };
 
+const NODE_API_BASE_URL_STORAGE_KEY = 'sr-tracker:node-api-base-url:v1';
+
 const pageHashById: Record<AppPage, string> = {
   transactions: '#/transactions',
   'daily-addresses': '#/daily-addresses',
+};
+
+const normalizeNodeApiBaseUrl = (baseUrl: string) => {
+  const normalizedUrl = (baseUrl.trim() || DEFAULT_ERGO_NODE_URL).replace(/\/+$/, '');
+  return normalizedUrl || DEFAULT_ERGO_NODE_URL.replace(/\/+$/, '');
+};
+
+const canUseLocalStorage = () => {
+  try {
+    return typeof window !== 'undefined' && Boolean(window.localStorage);
+  } catch {
+    return false;
+  }
+};
+
+const readPersistedNodeApiBaseUrl = () => {
+  if (!canUseLocalStorage()) {
+    return normalizeNodeApiBaseUrl(DEFAULT_ERGO_NODE_URL);
+  }
+
+  try {
+    return normalizeNodeApiBaseUrl(
+      window.localStorage.getItem(NODE_API_BASE_URL_STORAGE_KEY) ??
+        DEFAULT_ERGO_NODE_URL,
+    );
+  } catch {
+    return normalizeNodeApiBaseUrl(DEFAULT_ERGO_NODE_URL);
+  }
+};
+
+const persistNodeApiBaseUrl = (baseUrl: string) => {
+  if (!canUseLocalStorage()) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      NODE_API_BASE_URL_STORAGE_KEY,
+      normalizeNodeApiBaseUrl(baseUrl),
+    );
+  } catch {
+    // Ignore storage failures. The active in-memory URL still works for this session.
+  }
 };
 
 const readActivePageFromHash = (): AppPage => {
@@ -133,7 +178,18 @@ const recipientLabel = (kind: RentCollectionEvent['collectors'][number]['kind'])
 const recipientShortLabel = (kind: RentCollectionEvent['collectors'][number]['kind']) =>
   kind === 'minerFee' ? 'M' : 'C';
 
-const formatRecipientAddress = (address: string) => shortenId(address);
+interface CompactIdProps {
+  value: string;
+  visible?: number;
+  mobileVisible?: number;
+}
+
+const CompactId = ({ value, visible = 10, mobileVisible = 5 }: CompactIdProps) => (
+  <>
+    <span className="compact-id-desktop">{shortenId(value, visible)}</span>
+    <span className="compact-id-mobile">{shortenId(value, mobileVisible)}</span>
+  </>
+);
 
 const getLocalDay = (timestamp: number) => {
   const date = new Date(timestamp);
@@ -199,6 +255,8 @@ const buildDailyAddressTotals = (events: RentCollectionEvent[]): DailyAddressTot
 function App() {
   const [state, setState] = useState<AppState>(initialState);
   const [activePage, setActivePage] = useState<AppPage>(() => readActivePageFromHash());
+  const [nodeApiBaseUrl, setNodeApiBaseUrl] = useState(readPersistedNodeApiBaseUrl);
+  const [nodeApiBaseUrlDraft, setNodeApiBaseUrlDraft] = useState(() => nodeApiBaseUrl);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [dailyLoadBoundaryTimestamp, setDailyLoadBoundaryTimestamp] = useState<number | null>(
     null,
@@ -207,17 +265,36 @@ function App() {
     () => getCachedTokenMetadata(),
   );
   const stateRef = useRef(state);
+  const nodeApiBaseUrlRef = useRef(nodeApiBaseUrl);
   const bootstrappedRef = useRef(false);
   const pollInFlightRef = useRef(false);
   const dailyAutoLoadAttemptHeightRef = useRef<number | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const reloadLatestRef = useRef<() => Promise<void>>(async () => {});
+  const reloadLatestRef = useRef<(baseUrl?: string) => Promise<void>>(async () => {});
   const loadMoreRef = useRef<() => Promise<void>>(async () => {});
   const checkForNewBlocksRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    nodeApiBaseUrlRef.current = nodeApiBaseUrl;
+  }, [nodeApiBaseUrl]);
+
+  const commitNodeApiBaseUrlDraft = (activate = false) => {
+    const nextNodeApiBaseUrl = normalizeNodeApiBaseUrl(nodeApiBaseUrlDraft);
+
+    setNodeApiBaseUrlDraft(nextNodeApiBaseUrl);
+    persistNodeApiBaseUrl(nextNodeApiBaseUrl);
+
+    if (activate) {
+      nodeApiBaseUrlRef.current = nextNodeApiBaseUrl;
+      setNodeApiBaseUrl(nextNodeApiBaseUrl);
+    }
+
+    return nextNodeApiBaseUrl;
+  };
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -234,14 +311,20 @@ function App() {
     previousStats: LoadedStats | null,
     reset: boolean,
     indexedHeight?: number,
+    baseUrl = nodeApiBaseUrlRef.current,
   ) => {
     try {
       const slice = await fetchRentCollectionSlice(
-        DEFAULT_ERGO_NODE_URL,
+        baseUrl,
         fromHeight,
         previousStats,
         indexedHeight,
       );
+
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       startTransition(() => {
         setState((current) => {
           if (reset) {
@@ -260,6 +343,10 @@ function App() {
         });
       });
     } catch (error) {
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       const message =
         error instanceof Error ? error.message : 'Failed to load storage-rent data.';
       setState((current) => ({
@@ -271,7 +358,7 @@ function App() {
     }
   };
 
-  const reloadLatest = async () => {
+  const reloadLatest = async (baseUrl = nodeApiBaseUrlRef.current) => {
     dailyAutoLoadAttemptHeightRef.current = null;
     setDailyLoadBoundaryTimestamp(null);
     setState((current) => ({
@@ -286,10 +373,18 @@ function App() {
     }));
 
     try {
-      const nodeInfo = await fetchNodeInfo(DEFAULT_ERGO_NODE_URL);
+      const nodeInfo = await fetchNodeInfo(baseUrl);
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       setState((current) => ({ ...current, nodeInfo }));
-      await loadSlice(nodeInfo.indexedHeight, null, true, nodeInfo.indexedHeight);
+      await loadSlice(nodeInfo.indexedHeight, null, true, nodeInfo.indexedHeight, baseUrl);
     } catch (error) {
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       const message =
         error instanceof Error ? error.message : 'Failed to fetch current node height.';
       setState((current) => ({
@@ -317,6 +412,7 @@ function App() {
       snapshot.stats,
       false,
       snapshot.nodeInfo?.indexedHeight,
+      nodeApiBaseUrlRef.current,
     );
   };
 
@@ -339,9 +435,14 @@ function App() {
     }
 
     pollInFlightRef.current = true;
+    const baseUrl = nodeApiBaseUrlRef.current;
 
     try {
-      const latestNodeInfo = await fetchNodeInfo(DEFAULT_ERGO_NODE_URL);
+      const latestNodeInfo = await fetchNodeInfo(baseUrl);
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       const previousNodeInfo = snapshot.nodeInfo;
       const latestIndexedHeight = latestNodeInfo.indexedHeight;
       const previousIndexedHeight = previousNodeInfo?.indexedHeight;
@@ -390,11 +491,15 @@ function App() {
       }
 
       const range = await fetchRentCollectionRange(
-        DEFAULT_ERGO_NODE_URL,
+        baseUrl,
         previousIndexedHeight + 1,
         latestIndexedHeight,
         latestIndexedHeight,
       );
+
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
 
       startTransition(() => {
         setState((current) => {
@@ -425,6 +530,10 @@ function App() {
         });
       });
     } catch (error) {
+      if (nodeApiBaseUrlRef.current !== baseUrl) {
+        return;
+      }
+
       const message =
         error instanceof Error ? error.message : 'Failed to check for new blocks.';
       setState((current) => ({
@@ -556,7 +665,7 @@ function App() {
 
     let cancelled = false;
 
-    void loadTokenMetadata(DEFAULT_ERGO_NODE_URL, recipientAssetTokenIds)
+    void loadTokenMetadata(nodeApiBaseUrl, recipientAssetTokenIds)
       .then((loadedMetadata) => {
         if (cancelled || !Object.keys(loadedMetadata).length) {
           return;
@@ -584,7 +693,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [recipientAssetTokenIds]);
+  }, [nodeApiBaseUrl, recipientAssetTokenIds]);
 
   return (
     <main className="app-shell">
@@ -594,9 +703,31 @@ function App() {
           <h1>SR tracker</h1>
         </div>
         <div className="hero-actions">
-          <button className="primary-button" onClick={() => void reloadLatestRef.current()}>
-            Refresh latest
-          </button>
+          <form
+            className="node-api-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void reloadLatestRef.current(commitNodeApiBaseUrlDraft(true));
+            }}
+          >
+            <label className="node-api-control">
+              <span>Node API</span>
+              <input
+                aria-label="Node API base URL"
+                autoCapitalize="none"
+                autoComplete="url"
+                onBlur={() => commitNodeApiBaseUrlDraft()}
+                onChange={(event) => setNodeApiBaseUrlDraft(event.target.value)}
+                inputMode="url"
+                spellCheck={false}
+                type="text"
+                value={nodeApiBaseUrlDraft}
+              />
+            </label>
+            <button className="primary-button" type="submit">
+              Refresh latest
+            </button>
+          </form>
           <label className="auto-refresh-toggle">
             <input
               checked={autoRefreshEnabled}
@@ -630,7 +761,7 @@ function App() {
           <p>
             {state.nodeInfo
               ? `Indexed ${formatCount(state.nodeInfo.indexedHeight)}`
-              : DEFAULT_ERGO_NODE_URL}
+              : nodeApiBaseUrl}
           </p>
         </article>
         <article className="stat-card">
@@ -717,7 +848,7 @@ function App() {
                             rel="noreferrer"
                             title={total.address}
                           >
-                            {shortenId(total.address, 12)}
+                            <CompactId value={total.address} visible={12} />
                           </a>
                         </td>
                         <td
@@ -775,7 +906,7 @@ function App() {
                             rel="noreferrer"
                             title={event.txId}
                           >
-                            {shortenId(event.txId)}
+                            <CompactId value={event.txId} />
                           </a>
                           {event.chainTxIds.length ? (
                             <div className="chain-link-list">
@@ -788,7 +919,7 @@ function App() {
                                   rel="noreferrer"
                                   title={chainTxId}
                                 >
-                                  {shortenId(chainTxId)}
+                                  <CompactId value={chainTxId} />
                                 </a>
                               ))}
                             </div>
@@ -804,7 +935,7 @@ function App() {
                             rel="noreferrer"
                             title={event.blockMinerAddress}
                           >
-                            {shortenId(event.blockMinerAddress)}
+                            <CompactId value={event.blockMinerAddress} />
                           </a>
                         ) : (
                           <span className="miner-missing">-</span>
@@ -828,7 +959,7 @@ function App() {
                                       {recipientShortLabel(recipient.kind)}
                                     </span>
                                     <span className="recipient-row-address">
-                                      {formatRecipientAddress(recipient.address)}
+                                      <CompactId value={recipient.address} />
                                     </span>
                                   </span>
                                   <span className="recipient-row-erg">
